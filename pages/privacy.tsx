@@ -1,0 +1,5 @@
+import Head from 'next/head'
+import Navbar from '@/components/Navbar'
+export default function PrivacyPage() {
+  return (<><Head><title>Privacy — Luminary AI</title></Head><Navbar /><div className="container" style={{padding:'4rem 1.5rem',maxWidth:720,margin:'0 auto'}}><h1 style={{marginBottom:'1rem'}}>Privacy Policy</h1><p style={{color:'var(--text-muted)',marginBottom:'1rem',lineHeight:1.8}}>Last updated: June 2026</p><p style={{color:'var(--text-muted)',lineHeight:1.8,marginBottom:'1rem'}}>Luminary AI takes your privacy seriously. We collect only the information needed to provide our service: your email address for authentication, your generated content (stored securely), and basic usage analytics.</p><p style={{color:'var(--text-muted)',lineHeight:1.8,marginBottom:'1rem'}}>We never sell your data to third parties. Your generated content belongs to you. You can delete your account and all associated data at any time from your dashboard settings.</p><p style={{color:'var(--text-muted)',lineHeight:1.8}}>For questions about your data, contact us at privacy@luminary.ai</p></div></>)
+}

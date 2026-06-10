@@ -1,0 +1,5 @@
+import Head from 'next/head'
+import Navbar from '@/components/Navbar'
+export default function TermsPage() {
+  return (<><Head><title>Terms — Luminary AI</title></Head><Navbar /><div className="container" style={{padding:'4rem 1.5rem',maxWidth:720,margin:'0 auto'}}><h1 style={{marginBottom:'1rem'}}>Terms of Service</h1><p style={{color:'var(--text-muted)',marginBottom:'1rem',lineHeight:1.8}}>Last updated: June 2026</p><p style={{color:'var(--text-muted)',lineHeight:1.8,marginBottom:'1rem'}}>By using Luminary AI, you agree to use the platform responsibly and legally. You retain ownership of all content you create using our platform. You may not use Luminary to generate content that is harmful, illegal, or violates the rights of others.</p><p style={{color:'var(--text-muted)',lineHeight:1.8,marginBottom:'1rem'}}>Starter plan users may not use generated content for commercial purposes without upgrading to Creator or Pro. Pro plan users receive full commercial rights to all generated content.</p><p style={{color:'var(--text-muted)',lineHeight:1.8}}>For questions contact legal@luminary.ai</p></div></>)
+}
