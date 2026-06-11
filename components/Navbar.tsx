@@ -25,7 +25,11 @@ export default function Navbar() {
   return (
     <nav className="nav">
       <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div className="logo-mark">L</div>
+        <div style={{width:36,height:36,borderRadius:9,background:'#0E0C15',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative'}}>
+  <div style={{position:'absolute',left:8,top:8,width:6,height:22,background:'linear-gradient(180deg,#E05C1A,#D4286F)',borderRadius:2}}/>
+  <div style={{position:'absolute',left:8,top:22,width:18,height:6,background:'linear-gradient(90deg,#E05C1A,#D4286F)',borderRadius:2}}/>
+  <div style={{position:'absolute',right:7,top:8,width:8,height:8,borderRadius:'50%',background:'#F5A623'}}/>
+</div>
         <span className="nav-logo grad">Luminary</span>
       </Link>
 
