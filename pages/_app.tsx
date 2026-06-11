@@ -1,16 +1,32 @@
-import { Html, Head, Main, NextScript } from 'next/document'
+import type { AppProps } from 'next/app'
+import { SessionProvider } from 'next-auth/react'
+import { Toaster } from 'react-hot-toast'
+import { useEffect } from 'react'
+import '../styles/globals.css'
 
-export default function Document() {
+export default function App({ Component, pageProps: { session, ...pageProps } }: AppProps) {
+  useEffect(() => {
+    const saved = localStorage.getItem('theme')
+    if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark')
+  }, [])
+
   return (
-    <Html>
-      <Head>
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-        <link rel="shortcut icon" href="/favicon.svg" />
-      </Head>
-      <body>
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
+    <SessionProvider session={session}>
+      <Component {...pageProps} />
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: 'var(--card)',
+            color: 'var(--text)',
+            border: '1px solid var(--border)',
+            fontFamily: 'DM Sans, sans-serif',
+            fontSize: '0.88rem',
+          },
+          success: { iconTheme: { primary: '#0FA896', secondary: '#fff' } },
+          error: { iconTheme: { primary: '#D4286F', secondary: '#fff' } },
+        }}
+      />
+    </SessionProvider>
   )
 }
