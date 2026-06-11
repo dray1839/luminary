@@ -3,24 +3,9 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { getServerSession } from 'next-auth'
 import { authOptions } from './auth/[...nextauth]'
 import { prisma } from '@/lib/prisma'
-import Replicate from 'replicate'
 
-const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN! })
-
-// Credit costs per generation type
 const COSTS: Record<string, number> = {
-  IMAGE: 1,
-  VIDEO: 5,
-  ANIMATION: 3,
-  STYLE_TRANSFER: 2,
-}
-
-// Replicate model IDs
-const MODELS: Record<string, string> = {
-  IMAGE: 'stability-ai/stable-diffusion-3',
-  VIDEO: 'anotherjesse/zeroscope-v2-xl:9f747673945c62801b13b84701c783929c0ee784e4748ec062204894dda1a351',
-  ANIMATION: 'andreasjansson/stable-diffusion-animation:ca1f5e306e5721e19c473e0d094e6603f0456fe759c10715fcd6c1b79242d4a5',
-  STYLE_TRANSFER: 'stability-ai/stable-diffusion-img2img:15a3689ee13b0d2616e98820eca31d4af4a0e80d261fc7220cd7b32f9bea6954',
+  IMAGE: 1, VIDEO: 5, ANIMATION: 3, STYLE_TRANSFER: 2,
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!session?.user) return res.status(401).json({ error: 'Not authenticated' })
 
   const userId = (session.user as any).id
-  const { prompt, type = 'IMAGE', isPublic = false, inputImage } = req.body
+  const { prompt, type = 'IMAGE', isPublic = false } = req.body
 
   if (!prompt) return res.status(400).json({ error: 'Prompt required' })
 
@@ -42,32 +27,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(402).json({ error: 'Not enough credits. Please upgrade your plan.' })
   }
 
-  // Create generation record
+  const token = process.env.REPLICATE_API_TOKEN
+  if (!token) return res.status(500).json({ error: 'Replicate token not configured' })
+
   const generation = await prisma.generation.create({
     data: { userId, type, prompt, status: 'PROCESSING', isPublic },
   })
 
   try {
-    let output: any
+    // Call Replicate API directly using fetch
+    const response = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'wait=30',
+      },
+      body: JSON.stringify({
+        input: { prompt, num_outputs: 1, output_format: 'webp', output_quality: 90 }
+      }),
+    })
 
-    if (type === 'IMAGE') {
-      output = await replicate.run(
-        'stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b',
-        { input: { prompt, num_outputs: 1, width: 1024, height: 1024 } }
-      )
-    } else if (type === 'VIDEO') {
-      output = await replicate.run(MODELS.VIDEO as any, {
-        input: { prompt, num_frames: 24, width: 1024, height: 576 },
-      })
-    } else if (type === 'ANIMATION') {
-      output = await replicate.run(MODELS.ANIMATION as any, {
-        input: { prompt_start: prompt, prompt_end: prompt + ', motion', num_frames: 16 },
-      })
+    if (!response.ok) {
+      const err = await response.json()
+      throw new Error(err.detail ?? 'Replicate error')
     }
 
-    const outputUrl = Array.isArray(output) ? output[0] : output
+    const prediction = await response.json()
+    const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output
 
-    // Update generation and deduct credits
     await prisma.$transaction([
       prisma.generation.update({
         where: { id: generation.id },
