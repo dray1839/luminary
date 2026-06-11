@@ -8,6 +8,23 @@ const COSTS: Record<string, number> = {
   IMAGE: 1, VIDEO: 5, ANIMATION: 3, STYLE_TRANSFER: 2,
 }
 
+async function pollPrediction(id: string, token: string, maxAttempts = 40) {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, 3000))
+    const res = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const data = await res.json()
+    if (data.status === 'succeeded') {
+      return Array.isArray(data.output) ? data.output[0] : data.output
+    }
+    if (data.status === 'failed') {
+      throw new Error(data.error || 'Generation failed')
+    }
+  }
+  throw new Error('Generation timed out')
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
@@ -23,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = await prisma.user.findUnique({ where: { id: userId } })
   if (!user) return res.status(404).json({ error: 'User not found' })
   if (user.plan === 'STARTER' && user.credits < cost) {
-    return res.status(402).json({ error: 'Not enough credits. Please upgrade your plan.' })
+    return res.status(402).json({ error: 'Not enough credits. Please upgrade.' })
   }
 
   const token = process.env.REPLICATE_API_TOKEN
@@ -37,8 +54,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let outputUrl: string | null = null
 
     if (type === 'IMAGE' || type === 'STYLE_TRANSFER') {
-      // Fast image generation with flux-schnell
-      const response = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
+      // Fast image with flux-schnell
+      const res2 = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -49,51 +66,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           input: { prompt, num_outputs: 1, output_format: 'webp', output_quality: 90 }
         }),
       })
-      if (!response.ok) {
-        const err = await response.json()
+      if (!res2.ok) {
+        const err = await res2.json()
         throw new Error(err.detail ?? 'Image generation failed')
       }
-      const data = await response.json()
+      const data = await res2.json()
       outputUrl = Array.isArray(data.output) ? data.output[0] : data.output
+      if (!outputUrl && data.id) {
+        outputUrl = await pollPrediction(data.id, token)
+      }
 
     } else if (type === 'VIDEO') {
-      // Video generation with minimax
-      const response = await fetch('https://api.replicate.com/v1/models/minimax/video-01/predictions', {
+      // Video with minimax
+      const res2 = await fetch('https://api.replicate.com/v1/models/minimax/video-01/predictions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'Prefer': 'wait=60',
         },
         body: JSON.stringify({
           input: { prompt, prompt_optimizer: true }
         }),
       })
-      if (!response.ok) {
-        const err = await response.json()
+      if (!res2.ok) {
+        const err = await res2.json()
         throw new Error(err.detail ?? 'Video generation failed')
       }
-      const data = await response.json()
-      // Poll for completion if not done
-      if (data.status !== 'succeeded') {
-        let prediction = data
-        let attempts = 0
-        while (prediction.status !== 'succeeded' && prediction.status !== 'failed' && attempts < 30) {
-          await new Promise(r => setTimeout(r, 3000))
-          const poll = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          })
-          prediction = await poll.json()
-          attempts++
-        }
-        outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output
-      } else {
-        outputUrl = Array.isArray(data.output) ? data.output[0] : data.output
-      }
+      const data = await res2.json()
+      outputUrl = await pollPrediction(data.id, token)
 
     } else if (type === 'ANIMATION') {
-      // Animation - image to video with stable-video-diffusion
-      const response = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
+      // Animation with wan-i2v (image to video animation)
+      // First generate a base image
+      const imgRes = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -101,12 +106,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           'Prefer': 'wait=30',
         },
         body: JSON.stringify({
-          input: { prompt: prompt + ', motion blur, animated, cinematic', num_outputs: 1, output_format: 'webp' }
+          input: { prompt, num_outputs: 1, output_format: 'webp', output_quality: 90 }
         }),
       })
-      if (!response.ok) throw new Error('Animation generation failed')
-      const data = await response.json()
-      outputUrl = Array.isArray(data.output) ? data.output[0] : data.output
+      if (!imgRes.ok) throw new Error('Animation base image failed')
+      const imgData = await imgRes.json()
+      let imageUrl = Array.isArray(imgData.output) ? imgData.output[0] : imgData.output
+      if (!imageUrl && imgData.id) {
+        imageUrl = await pollPrediction(imgData.id, token)
+      }
+
+      // Then animate it with wan-i2v
+      const animRes = await fetch('https://api.replicate.com/v1/models/wavespeedai/wan-2.1-i2v-480p/predictions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          input: {
+            image: imageUrl,
+            prompt: prompt + ', smooth motion, cinematic animation',
+            max_area: '480*832',
+            fast_mode: 'Balanced',
+          }
+        }),
+      })
+      if (!animRes.ok) {
+        // Fallback to video if animation model fails
+        const err = await animRes.json()
+        console.error('Animation failed, falling back to video:', err)
+        outputUrl = imageUrl // Return the static image as fallback
+      } else {
+        const animData = await animRes.json()
+        outputUrl = await pollPrediction(animData.id, token, 50)
+      }
     }
 
     await prisma.$transaction([
