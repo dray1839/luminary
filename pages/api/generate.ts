@@ -10,7 +10,7 @@ const COSTS: Record<string, number> = {
 
 async function pollPrediction(id: string, token: string, maxAttempts = 40) {
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, 3000))
+    await new Promise(r => setTimeout(r, 4000))
     const res = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -22,7 +22,43 @@ async function pollPrediction(id: string, token: string, maxAttempts = 40) {
       throw new Error(data.error || 'Generation failed')
     }
   }
-  throw new Error('Generation timed out')
+  throw new Error('Generation timed out after 2.5 minutes')
+}
+
+async function generateImage(prompt: string, token: string) {
+  // Use the standard predictions endpoint which is more reliable
+  const res = await fetch('https://api.replicate.com/v1/predictions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      version: 'black-forest-labs/flux-schnell',
+      input: {
+        prompt,
+        num_outputs: 1,
+        output_format: 'png',
+        output_quality: 90,
+        aspect_ratio: '1:1',
+      }
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail ?? JSON.stringify(err))
+  }
+
+  const data = await res.json()
+  let outputUrl = Array.isArray(data.output) ? data.output[0] : data.output
+
+  if (!outputUrl && data.id) {
+    outputUrl = await pollPrediction(data.id, token)
+  }
+
+  if (!outputUrl) throw new Error('No output from image model')
+  return outputUrl
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -54,92 +90,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let outputUrl: string | null = null
 
     if (type === 'IMAGE' || type === 'STYLE_TRANSFER') {
-      // Fast image with flux-schnell
-      const res2 = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'wait=30',
-        },
-        body: JSON.stringify({
-          input: { prompt, num_outputs: 1, output_format: 'webp', output_quality: 90 }
-        }),
-      })
-      if (!res2.ok) {
-        const err = await res2.json()
-        throw new Error(err.detail ?? 'Image generation failed')
-      }
-      const data = await res2.json()
-      outputUrl = Array.isArray(data.output) ? data.output[0] : data.output
-      if (!outputUrl && data.id) {
-        outputUrl = await pollPrediction(data.id, token)
-      }
+      outputUrl = await generateImage(prompt, token)
 
     } else if (type === 'VIDEO') {
-      // Video with minimax
-      const res2 = await fetch('https://api.replicate.com/v1/models/minimax/video-01/predictions', {
+      const videoRes = await fetch('https://api.replicate.com/v1/predictions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          version: 'minimax/video-01',
           input: { prompt, prompt_optimizer: true }
         }),
       })
-      if (!res2.ok) {
-        const err = await res2.json()
+      if (!videoRes.ok) {
+        const err = await videoRes.json()
         throw new Error(err.detail ?? 'Video generation failed')
       }
-      const data = await res2.json()
-      outputUrl = await pollPrediction(data.id, token)
+      const videoData = await videoRes.json()
+      outputUrl = await pollPrediction(videoData.id, token, 50)
 
     } else if (type === 'ANIMATION') {
-      // Animation with wan-i2v (image to video animation)
-      // First generate a base image
-      const imgRes = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'wait=30',
-        },
-        body: JSON.stringify({
-          input: { prompt, num_outputs: 1, output_format: 'webp', output_quality: 90 }
-        }),
-      })
-      if (!imgRes.ok) throw new Error('Animation base image failed')
-      const imgData = await imgRes.json()
-      let imageUrl = Array.isArray(imgData.output) ? imgData.output[0] : imgData.output
-      if (!imageUrl && imgData.id) {
-        imageUrl = await pollPrediction(imgData.id, token)
-      }
+      // Step 1: Generate base image
+      const imageUrl = await generateImage(prompt, token)
 
-      // Then animate it with wan-i2v
-      const animRes = await fetch('https://api.replicate.com/v1/models/wavespeedai/wan-2.1-i2v-480p/predictions', {
+      // Step 2: Animate using stable-video-diffusion
+      const animRes = await fetch('https://api.replicate.com/v1/predictions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          version: 'stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438',
           input: {
-            image: imageUrl,
-            prompt: prompt + ', smooth motion, cinematic animation',
-            max_area: '480*832',
-            fast_mode: 'Balanced',
+            input_image: imageUrl,
+            frames_per_second: 6,
+            sizing_strategy: 'maintain_aspect_ratio',
+            motion_bucket_id: 127,
+            cond_aug: 0.02,
           }
         }),
       })
+
       if (!animRes.ok) {
-        // Fallback to video if animation model fails
-        const err = await animRes.json()
-        console.error('Animation failed, falling back to video:', err)
-        outputUrl = imageUrl // Return the static image as fallback
+        // Fallback: return the static image
+        console.error('SVD animation failed, returning image')
+        outputUrl = imageUrl
       } else {
         const animData = await animRes.json()
         outputUrl = await pollPrediction(animData.id, token, 50)
+        if (!outputUrl) outputUrl = imageUrl // fallback to image
       }
     }
 
